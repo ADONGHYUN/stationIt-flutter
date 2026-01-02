@@ -2,9 +2,37 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart'; // 위치 정보
 import 'package:http/http.dart' as http; // API 통신
 import 'dart:convert'; // JSON 파싱
+import 'dart:io'; // 플랫폼 확인용
 
 void main() {
   runApp(const MyApp());
+}
+
+class Station {
+    final String name;
+    final double latitude;
+    final double longitude;
+    final String lineName;
+    final int stationOrder;
+
+    Station({
+      required this.name,
+      required this.latitude,
+      required this.longitude,
+      required this.lineName,
+      required this.stationOrder,
+  });
+
+  // JSON 데이터를 객체로 변환
+  factory Station.fromJson(Map<String, dynamic> json) {
+    return Station(
+      name: json['name'] ?? '',
+      latitude: (json['latitude'] ?? 0.0).toDouble(),
+      longitude: (json['longitude'] ?? 0.0).toDouble(),
+      lineName: json['lineName'] ?? '',
+      stationOrder: json['stationOrder'] ?? 0,
+    );
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -31,80 +59,187 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  List<String> _stations = [];
+  List<Station> _stations = [];
+  bool _isLoading = false;
+  final double _cardWidth = 200.0; // 역 카드의 가로 너비 설정
+  // 에뮬레이터 환경에 따른 주소 설정 (Android: 10.0.2.2 / iOS: localhost)
+  final String _baseUrl = Platform.isAndroid
+      ? 'http://10.0.2.2:8080'
+      : 'http://localhost:8080';
 
   @override
   void initState() {
     super.initState();
-    _findNearestStationTest(); // 테스트용 더미 데이터 로드 (listView)
+    _fetchLocationAndStations();
   }
 
-  Future<void> _findNearestStationTest() async {
-    setState(() {
-      _stations = [
-        '강남',
-        '교대',
-        '역삼',
-        '선릉',
-        '삼성',
-        '봉은사',
-        '종합운동장',
-        '잠실새내',
-        '잠실',
-        '신천',
-      ];
-    });
+  Future<void> _fetchLocationAndStations() async {
+    setState(() => _isLoading = true);
+
+    try {
+      // 1. 위치 권한 확인
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.deniedForever) return;
+      }
+
+      // 2. 현재 위치 가져오기
+      const LocationSettings locationSettings = LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 100, // 100미터 이동 시 업데이트 (필요 시 조정)
+      );
+
+      Position position = await Geolocator.getCurrentPosition(
+        locationSettings: locationSettings,
+      );
+
+      await _getNearestStationsFromServer(position.latitude, position.longitude);
+    } catch (e) {
+      _showErrorSnackBar("오류 발생: $e");
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  /// 백엔드 API와 통신
+  Future<void> _getNearestStationsFromServer(double lat, double lon) async {
+    final url = Uri.parse('$_baseUrl/api/nearest-station?lat=$lat&lon=$lon');
+
+    try {
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        // UTF-8 디코딩 후 JSON 파싱
+        final Map<String, dynamic> decodedData = json.decode(
+          utf8.decode(response.bodyBytes),
+        );
+
+        // Map<String, dynamic>에서 Station 객체들만 추출하여 리스트 생성
+        List<Station> tempStations = [];
+        decodedData.forEach((key, value) {
+          tempStations.add(Station.fromJson(value));
+        });
+
+        setState(() {
+          _stations = tempStations;
+        });
+      } else {
+        _showErrorSnackBar("서버 오류: ${response.statusCode}");
+      }
+    } catch (e) {
+      _showErrorSnackBar("서버 연결 실패. 백엔드가 켜져있는지 확인하세요.");
+      print(e);
+    }
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('현재 위치 지하철역'),
-        backgroundColor: Colors.green,
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            // 가로 중앙 정렬
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: <Widget>[
-              const Spacer(flex: 5),
+    // 첫 번째 역을 가운데에 오게 하기 위한 여백 계산
+    double screenWidth = MediaQuery.of(context).size.width;
+    double sidePadding = (screenWidth - _cardWidth) / 2;
 
-              SizedBox(
-                height: 60,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _stations.length,
-                  itemBuilder: (context, index) {
-                    return Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 12),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        // color: Colors.green[100],
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Center(
-                        child: Text(
-                          _stations[index],
-                          style: const TextStyle(
-                            fontSize: 30,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const Spacer(flex: 5),
-            ],
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: const Text('현재 지하철역'),
+        centerTitle: true,
+        backgroundColor: Colors.green,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _fetchLocationAndStations,
+          )
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _stations.isEmpty
+          ? const Center(child: Text("주변에 역 정보가 없습니다."))
+          : Column(
+        children: [
+          const Spacer(flex: 2),
+          const Text(
+            "현재역",
+            style: TextStyle(fontSize: 18, color: Colors.grey),
           ),
-        ),
+          const SizedBox(height: 20),
+          // 슬라이드 가능한 리스트 영역
+          SizedBox(
+            height: 150,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              // 양옆에 패딩을 주어 첫 번째/마지막 역이 가운데 오도록 설정
+              padding: EdgeInsets.symmetric(horizontal: sidePadding),
+              // 튕기는 효과를 부드럽게 (옵션)
+              physics: const BouncingScrollPhysics(),
+              itemCount: _stations.length,
+              itemBuilder: (context, index) {
+                return _buildStationCard(_stations[index]);
+              },
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            "← 밀어서 다른 역 확인 →",
+            style: TextStyle(fontSize: 14, color: Colors.black26),
+          ),
+          const Spacer(flex: 3),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStationCard(Station station) {
+    return Container(
+      width: _cardWidth,
+      margin: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(25),
+        border: Border.all(color: Colors.green, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.green,
+            blurRadius: 10,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // 노선명 (예: 2호선)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.green,
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: Text(
+              station.lineName,
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+          ),
+          const SizedBox(height: 10),
+          // 역 이름
+          Text(
+            station.name,
+            style: const TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+        ],
       ),
     );
   }
