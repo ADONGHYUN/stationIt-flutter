@@ -3,6 +3,7 @@ import 'package:geolocator/geolocator.dart'; // 위치 정보
 import 'package:http/http.dart' as http; // API 통신
 import 'dart:convert'; // JSON 파싱
 import 'dart:io'; // 플랫폼 확인용
+import 'dart:async'; // Timer를 위해 추가
 
 void main() {
   runApp(const MyApp());
@@ -61,6 +62,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   List<Station> _stations = [];
   bool _isLoading = false;
+  bool _showSplash = true;
   final double _cardWidth = 200.0; // 역 카드의 가로 너비 설정
   // 에뮬레이터 환경에 따른 주소 설정 (Android: 10.0.2.2 / iOS: localhost)
   final String _baseUrl = Platform.isAndroid
@@ -70,6 +72,20 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _initApp();
+  }
+
+
+  Future<void> _initApp() async {
+    // 2초간 로고 보여줌
+    await Future.delayed(const Duration(seconds: 2));
+
+    // 2. 로고 화면 해제
+    setState(() {
+      _showSplash = false;
+    });
+
+    // 3. 그 다음 위치 및 데이터 가져오기 시작
     _fetchLocationAndStations();
   }
 
@@ -87,7 +103,6 @@ class _HomeScreenState extends State<HomeScreen> {
       // 2. 현재 위치 가져오기
       const LocationSettings locationSettings = LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 100, // 100미터 이동 시 업데이트 (필요 시 조정)
       );
 
       Position position = await Geolocator.getCurrentPosition(
@@ -139,59 +154,89 @@ class _HomeScreenState extends State<HomeScreen> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// 데이터 없을 때와 앱 오픈시 이미지로딩(로컬 assets 사용)
+  Widget _buildLogoState(BuildContext context, {String message = "주변 지하철역을 찾는 중..."}) {
+    // 화면 너비의 65% 크기로 설정
+    final screenWidth = MediaQuery.of(context).size.width;
+    final logoSize = screenWidth * 0.65;
+
+    return SizedBox(
+      width: double.infinity, // 가로로 꽉 차게
+      child: Column(
+        children: [
+          const Spacer(flex: 3), // 상단 여백
+          Image.asset(
+            'assets/app_logo.png',
+            width: logoSize,
+            height: logoSize,
+            fit: BoxFit.contain, // 비율 유지하며 크기 맞춤
+            errorBuilder: (context, error, stackTrace) =>
+                Icon(Icons.subway, size: logoSize / 2, color: Colors.green.withOpacity(0.5)),
+          ),
+          const SizedBox(height: 40),
+          Text(
+            message,
+            style: const TextStyle(
+              fontSize: 18,
+              color: Colors.black87,
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          if (_isLoading) ...[
+            const SizedBox(height: 30),
+            const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 3, color: Colors.green),
+            ),
+          ],
+          const Spacer(flex: 4), // 하단 여백
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // 첫 번째 역을 가운데에 오게 하기 위한 여백 계산
     double screenWidth = MediaQuery.of(context).size.width;
     double sidePadding = (screenWidth - _cardWidth) / 2;
 
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
+      appBar: _showSplash ? null : AppBar( // 로고 화면일 때는 앱바도 숨김
         title: const Text('현재 지하철역'),
         centerTitle: true,
         backgroundColor: Colors.green,
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _fetchLocationAndStations,
-          )
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchLocationAndStations)
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+      body: _showSplash
+          ? _buildLogoState(context, message: "역잇")
+          : _isLoading && _stations.isEmpty
+          ? _buildLogoState(context, message: "내 위치를 확인하고 있습니다...")
           : _stations.isEmpty
-          ? const Center(child: Text("주변에 역 정보가 없습니다."))
+          ? _buildLogoState(context, message: "주변에 역이 없거나\n위치를 찾을 수 없습니다.")
           : Column(
         children: [
           const Spacer(flex: 2),
-          const Text(
-            "현재역",
-            style: TextStyle(fontSize: 18, color: Colors.grey),
-          ),
+          const Text("현재역", style: TextStyle(fontSize: 18, color: Colors.grey)),
           const SizedBox(height: 20),
-          // 슬라이드 가능한 리스트 영역
           SizedBox(
             height: 150,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
-              // 양옆에 패딩을 주어 첫 번째/마지막 역이 가운데 오도록 설정
               padding: EdgeInsets.symmetric(horizontal: sidePadding),
-              // 튕기는 효과를 부드럽게 (옵션)
               physics: const BouncingScrollPhysics(),
               itemCount: _stations.length,
-              itemBuilder: (context, index) {
-                return _buildStationCard(_stations[index]);
-              },
+              itemBuilder: (context, index) => _buildStationCard(_stations[index]),
             ),
           ),
           const SizedBox(height: 20),
-          const Text(
-            "← 밀어서 다른 역 확인 →",
-            style: TextStyle(fontSize: 14, color: Colors.black26),
-          ),
+          const Text("← 밀어서 다른 역 확인 →", style: TextStyle(fontSize: 14, color: Colors.black26)),
           const Spacer(flex: 3),
         ],
       ),
@@ -207,38 +252,19 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(25),
         border: Border.all(color: Colors.green, width: 2),
         boxShadow: [
-          BoxShadow(
-            color: Colors.green,
-            blurRadius: 10,
-            spreadRadius: 2,
-          ),
+          BoxShadow(color: Colors.green.withOpacity(0.1), blurRadius: 10, spreadRadius: 2),
         ],
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // 노선명 (예: 2호선)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.green,
-              borderRadius: BorderRadius.circular(15),
-            ),
-            child: Text(
-              station.lineName,
-              style: const TextStyle(color: Colors.white, fontSize: 12),
-            ),
+            decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(15)),
+            child: Text(station.lineName, style: const TextStyle(color: Colors.white, fontSize: 12)),
           ),
           const SizedBox(height: 10),
-          // 역 이름
-          Text(
-            station.name,
-            style: const TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
-          ),
+          Text(station.name, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
         ],
       ),
     );
